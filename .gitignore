@@ -1,0 +1,4 @@
+*.toml
+*.zip
+.aws-sam/
+resources/

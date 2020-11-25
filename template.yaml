@@ -1,0 +1,334 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: This stack deploys a REST API for an Amazon DocumentDB cluster
+
+Parameters:
+
+  Prefix:
+    Type: String
+    Description: Prefix for resources
+    
+  DocDBIdentifier:
+    Type: String
+    Description: Amazon DocumentDB cluster identifier
+
+  DocDBUsername:
+    Type: String
+    Description: Username for the Amazon DocumentDB cluster 
+
+  DocDBPassword:
+    Type: String
+    Description: Password for the Amazon DocumentDB cluster
+    NoEcho: true
+    MinLength: 5
+    
+  DocDBVPCSubnet:
+    Type: AWS::EC2::Subnet::Id
+    Description: VPC Subnet with connectivity to Amazon DocumentDB cluster
+    
+  DocDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group with access to Amazon DocumentDB from within the VPC
+    
+  APIUsername:
+    Type: String
+    Description: Username to allow access to the API
+    
+  APIPassword:
+    Type: String
+    Description: Password to allow access to the API
+    NoEcho: true
+    MinLength: 4
+    
+Resources:
+# Secret Manager
+  DocDBSecret:
+    Type: 'AWS::SecretsManager::Secret'
+    Properties:
+      Name: !Sub ${Prefix}-DocDBSecret
+      Description: This secret has the credentials for the DocumentDB cluster
+      SecretString:
+        !Join
+          - '' 
+          - - '{"username":"'
+            - !Ref DocDBUsername
+            - '","password":"'
+            - !Ref DocDBPassword
+            - '", "ssl": true}'
+  
+  SecretDocDBClusterAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DocDBSecret
+      TargetId: !Ref DocDBIdentifier
+      TargetType: AWS::DocDB::DBCluster
+
+# IAM
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AWSLambdaExecute
+      Policies:
+        - PolicyName: DocumentDBSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DocDBSecret
+      RoleName: !Sub ${Prefix}-Role-Lambda
+
+# Lambda
+  LambdaLayerPymongo:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub ${Prefix}-Layer-pymongo
+      Description: Layer for Pymongo and RDS PEM file
+      ContentUri: layer-pymongo.zip
+      CompatibleRuntimes:
+        - python3.6
+      LicenseInfo: 'MIT'
+      RetentionPolicy: Retain
+
+  LambdaCRUDFunction: 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${Prefix}-DocDBREST
+      CodeUri: docdb_rest/
+      Handler: app.lambda_handler
+      Layers:
+        - !Ref LambdaLayerPymongo
+      Runtime: python3.6
+      Environment:
+        Variables:
+          DB_SECRET_NAME: !Sub ${Prefix}-DocDBSecret
+      Role: !GetAtt LambdaExecutionRole.Arn
+      VpcConfig: 
+        SecurityGroupIds: 
+          - !Ref DocDBSecurityGroup
+        SubnetIds: 
+          - !Ref DocDBVPCSubnet
+      Timeout: 5
+
+  LambdaBasicAuthFunction: 
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${Prefix}-BasicAuth
+      Handler: auth.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.6
+      Environment:
+        Variables:
+          USERNAME: !Ref APIUsername
+          PASSWORD: !Ref APIPassword
+      CodeUri: docdb_rest/
+      Timeout: 5
+
+  LambdaPermissionAPICRUD:
+    DependsOn: LambdaCRUDFunction
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaCRUDFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: 
+        !Join
+          - ''
+          - - 'arn:aws:execute-api:'
+            - !Ref AWS::Region
+            - ':'
+            - !Ref AWS::AccountId
+            - ':'
+            - !Ref APIDocDBREST
+            - '/*/*/*'
+
+  LambdaPermissionAPIBasicAuth:
+    DependsOn: LambdaBasicAuthFunction
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaBasicAuthFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: 
+        !Join
+          - ''
+          - - 'arn:aws:execute-api:'
+            - !Ref AWS::Region
+            - ':'
+            - !Ref AWS::AccountId
+            - ':'
+            - !Ref APIDocDBREST
+            - '/*/*'
+
+# API 
+  APIDocDBREST:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Sub ${Prefix}-api
+      DefinitionBody: 
+        openapi: "3.0.1"
+        info:
+          title: "generic_docdb"
+        paths:
+          /docdb/{general_db}/{general_collection}:
+            x-amazon-apigateway-any-method:
+              parameters:
+              - name: "general_db"
+                in: "path"
+                required: true
+                schema:
+                  type: "string"
+              - name: "general_collection"
+                in: "path"
+                required: true
+                schema:
+                  type: "string"
+              responses:
+                "200":
+                  description: "200 response"
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Empty"
+              security:
+              - BasicAuthLambda: []
+              x-amazon-apigateway-integration:
+                uri: 
+                  !Join
+                    - ''
+                    - - 'arn:aws:apigateway:'
+                      - !Ref AWS::Region
+                      - ':lambda:path/2015-03-31/functions/'
+                      - !GetAtt LambdaCRUDFunction.Arn
+                      - '/invocations'
+                responses:
+                  default:
+                    statusCode: "200"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /docdb/demodb/{general_collection}:
+            x-amazon-apigateway-any-method:
+              parameters:
+              - name: "general_collection"
+                in: "path"
+                required: true
+                schema:
+                  type: "string"
+              responses:
+                "200":
+                  description: "200 response"
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Empty"
+              security:
+              - BasicAuthLambda: []
+              x-amazon-apigateway-integration:
+                uri: 
+                  !Join
+                    - ''
+                    - - 'arn:aws:apigateway:'
+                      - !Ref AWS::Region
+                      - ':lambda:path/2015-03-31/functions/'
+                      - !GetAtt LambdaCRUDFunction.Arn
+                      - '/invocations'
+                responses:
+                  default:
+                    statusCode: "200"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+          /docdb/demodb/democollection:
+            x-amazon-apigateway-any-method:
+              responses:
+                "200":
+                  description: "200 response"
+                  content:
+                    application/json:
+                      schema:
+                        $ref: "#/components/schemas/Empty"
+              security:
+              - BasicAuthLambda: []
+              x-amazon-apigateway-integration:
+                uri: 
+                  !Join
+                    - ''
+                    - - 'arn:aws:apigateway:'
+                      - !Ref AWS::Region
+                      - ':lambda:path/2015-03-31/functions/'
+                      - !GetAtt LambdaCRUDFunction.Arn
+                      - '/invocations'
+                responses:
+                  default:
+                    statusCode: "200"
+                passthroughBehavior: "when_no_match"
+                httpMethod: "POST"
+                contentHandling: "CONVERT_TO_TEXT"
+                type: "aws_proxy"
+        components:
+          schemas:
+            Empty:
+              title: "Empty Schema"
+              type: "object"
+          securitySchemes:
+            BasicAuthLambda:
+              type: "apiKey"
+              name: "Authorization"
+              in: "header"
+              x-amazon-apigateway-authtype: "custom"
+              x-amazon-apigateway-authorizer:
+                authorizerUri: 
+                  !Join
+                    - ''
+                    - - 'arn:aws:apigateway:'
+                      - !Ref AWS::Region
+                      - ':lambda:path/2015-03-31/functions/'
+                      - !GetAtt LambdaBasicAuthFunction.Arn
+                      - '/invocations'
+                authorizerResultTtlInSeconds: 300
+                identitySource: "method.request.header.Authorization"
+                type: "request"
+        x-amazon-apigateway-gateway-responses:
+          UNAUTHORIZED:
+            statusCode: 401
+            responseParameters:
+              gatewayresponse.header.WWW-Authenticate: "'Basic'"
+            responseTemplates:
+              application/json: "{\"message\":$context.error.messageString}"
+
+      
+
+Outputs:
+  StackName:
+    Value: !Sub ${AWS::StackName}
+  DocDBSecret:
+    Value: !Ref DocDBSecret
+  LambdaExecutionRole:
+    Value: !Ref LambdaExecutionRole
+  LambdaLayerPymongo:
+    Value: !Ref LambdaLayerPymongo
+  LambdaCRUDFunction:
+    Value: !Ref LambdaCRUDFunction
+  LambdaBasicAuthFunction:
+    Value: !Ref LambdaBasicAuthFunction
+  APIDocDBREST:
+    Value: !Ref APIDocDBREST
+  APIRoot:
+    Value: !Sub ${APIDocDBREST}.execute-api.${AWS::Region}.amazonaws.com/${Prefix}-api/docdb
