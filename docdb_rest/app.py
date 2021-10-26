@@ -81,7 +81,7 @@ def collection_from_event(event):
     db = db_client[db_name]
     collection = db[collection_name]
     return collection
-## Hanlde DELETE
+## Handle DELETE
 def handle_delete(event):
     collection = collection_from_event(event)
     body = json.loads(event["body"])
@@ -91,7 +91,7 @@ def handle_delete(event):
     print(filter)
     res = collection.delete_many(filter)
     return stringify(res.raw_result)
-## Hanlde PATCH
+## Handle PATCH
 def handle_patch(event):
     collection = collection_from_event(event)
     filter = None
@@ -107,7 +107,7 @@ def handle_patch(event):
     print(update)
     res = collection.update_many(filter, update)
     return stringify(res.raw_result)
-## Hanlde POST
+## Handle POST
 def handle_post(event):
     collection = collection_from_event(event)
     body = json.loads(event["body"])
