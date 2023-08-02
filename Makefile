@@ -1,5 +1,5 @@
 # Replace Python version with the one installed
-PYTHON=python3.7
+PYTHON=python3.9
 PACKAGES=pymongo
 
 all: layer-pymongo.zip

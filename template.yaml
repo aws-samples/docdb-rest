@@ -100,7 +100,7 @@ Resources:
       Description: Layer for Pymongo and RDS PEM file
       ContentUri: layer-pymongo.zip
       CompatibleRuntimes:
-        - python3.7
+        - python3.9
       LicenseInfo: 'MIT'
       RetentionPolicy: Retain
 
@@ -112,7 +112,7 @@ Resources:
       Handler: app.lambda_handler
       Layers:
         - !Ref LambdaLayerPymongo
-      Runtime: python3.7
+      Runtime: python3.9
       Environment:
         Variables:
           DB_SECRET_NAME: !Sub ${Prefix}-DocDBSecret
@@ -130,7 +130,7 @@ Resources:
       FunctionName: !Sub ${Prefix}-BasicAuth
       Handler: auth.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.7
+      Runtime: python3.9
       Environment:
         Variables:
           USERNAME: !Ref APIUsername
