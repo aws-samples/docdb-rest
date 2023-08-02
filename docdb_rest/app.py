@@ -22,7 +22,7 @@ import datetime
 ## GLOBALS
 db_client = None
 db_secret_name = os.environ['DB_SECRET_NAME']
-pem_locator ='/opt/python/rds-combined-ca-bundle.pem'
+pem_locator ='/opt/python/global-bundle.pem'
 datetime_str = "%Y-%m-%dT%H:%M:%S"
 ## HELPERS
 def stringify(doc):
@@ -57,16 +57,23 @@ def get_credentials():
         raise
 ## DOCUMENTDB CONNECTION
 def get_db_client():
-    """Return an authenticated connection to DocumentDB"""
     # Use a global variable so Lambda can reuse the persisted client on future invocations
     global db_client
     if db_client is None:
         try:
-            (username, password, docdb_host, docdb_port) = get_credentials()
-            db_client = pymongo.MongoClient(host=docdb_host, port=docdb_port, ssl=True, ssl_ca_certs=pem_locator, replicaSet='rs0', connect = True)
-            db_client.admin.command('ismaster')
-            db_client["admin"].authenticate(name=username, password=password)
-        except Exception as ex:
+            # Retrieve Amazon DocumentDB credentials
+            (secret_username, secret_password, docdb_host, docdb_port) = get_credentials()
+            db_client = pymongo.MongoClient(
+                    host=docdb_host,
+                    port=docdb_port,
+                    tls=True,
+                    retryWrites=False,
+                    tlsCAFile=pem_locator,
+                    username=secret_username,
+                    password=secret_password,
+                    authSource='admin')
+        except Exception as e:
+            print('Failed to create new DocumentDB client: {}'.format(e))
             raise
     return db_client
 ## Extract the db.collection from event and return collection
