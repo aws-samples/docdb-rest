@@ -1,4 +1,5 @@
-PYTHON=python3.6
+# Replace Python version with the one installed
+PYTHON=python3.9
 PACKAGES=pymongo
 
 all: layer-pymongo.zip
@@ -11,7 +12,7 @@ clean:
 layer-pymongo.zip:
 	mkdir -p resources/python
 	PYTHONUSERBASE=resources/python $(PYTHON) -m pip install --user $(PACKAGES)
-	wget -O resources/python/rds-combined-ca-bundle.pem https://s3.amazonaws.com/rds-downloads/rds-combined-ca-bundle.pem
+	wget -O resources/python/global-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 	cd resources && zip -r ../layer-pymongo.zip python && cd ..
 	rm -rf resources
 
